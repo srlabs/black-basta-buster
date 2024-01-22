@@ -16,7 +16,12 @@
 import argparse
 import datetime
 import logging
-from mmap import mmap, MAP_SHARED, MAP_PRIVATE, MADV_SEQUENTIAL, MADV_DONTNEED, PAGESIZE
+try:
+    from mmap import MAP_SHARED, MAP_PRIVATE, MADV_SEQUENTIAL, MADV_DONTNEED
+except ImportError:
+    # Windows does not have these constants
+    MAP_SHARED, MAP_PRIVATE, MADV_SEQUENTIAL, MADV_DONTNEED = None, None, None, None
+from mmap import mmap, PAGESIZE
 from pathlib import Path
 import sys
 
@@ -116,15 +121,20 @@ def decrypt_file(f, keyblock, fsize=None, is_dry=True, lower_limit=None, upper_l
         upper_limit = fsize
     assert lower_limit < upper_limit
 
+    if MAP_SHARED is None:
+        mmap_args = {}
+    else:
+        mmap_args = { flags: MAP_SHARED if not is_dry else MAP_PRIVATE }
+
     with open(f, f_mode) as fd:
-        with mmap(fd.fileno(), 0, MAP_SHARED if not is_dry else MAP_PRIVATE) as mm:
+        with mmap(fd.fileno(), 0, **mmap_args) as mm:
             if lower_limit > PAGESIZE:
                 mm.madvise(MADV_DONTNEED, 0, lower_limit - (lower_limit % PAGESIZE))
             try:
                 mm.madvise(MADV_SEQUENTIAL, lower_limit - (lower_limit % PAGESIZE), upper_limit + (upper_limit % PAGESIZE))
                 def advise(t, start, end):
                     return mm.madvise(t, start, end)
-            except OSError:
+            except (OSError, AttributeError):
                 log.exception("Cannot mmap")
                 def advise(*args, **kwargs):
                     log.info("Cannot mmap")
